@@ -1,0 +1,1233 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#000000">
+<title>Event Horizon — digitale entiteit</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; touch-action: none;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #c9cbe0; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  #start { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: #000; z-index: 5; }
+  #start .box { max-width: 520px; padding: 28px; text-align: center; }
+  #start h1 { font-weight: 300; letter-spacing: 0.25em; font-size: 20px; color: #9aa0d8; margin: 0 0 6px; }
+  #start p { color: #7b7f9e; font-size: 14px; line-height: 1.5; margin: 6px 0 18px; }
+  .btn { display: block; width: 100%; margin: 10px 0; padding: 15px 16px; font-size: 16px; border-radius: 12px;
+    border: 1px solid #2c2f4a; background: #0d0e1a; color: #d6d8f0; cursor: pointer; }
+  .btn:active { background: #1a1c33; }
+  .btn small { display: block; color: #6e7296; font-size: 12px; margin-top: 3px; }
+  #msg { color: #c79a6a; font-size: 13px; min-height: 18px; }
+  label.cb { display: flex; gap: 10px; align-items: center; justify-content: center; font-size: 14px; color: #8d91b4; margin: 4px 0 8px; }
+  #gear { position: fixed; top: 10px; right: 12px; z-index: 4; width: 44px; height: 44px; border-radius: 22px;
+    border: none; background: rgba(255,255,255,0.04); color: rgba(255,255,255,0.25); font-size: 22px; cursor: pointer; }
+  #panel { position: fixed; top: 62px; right: 12px; z-index: 4; width: 250px; padding: 10px; border-radius: 14px;
+    background: rgba(10,10,20,0.92); border: 1px solid #23253a; display: none; }
+  #panel .btn { padding: 11px 12px; font-size: 14px; margin: 6px 0; text-align: left; }
+  #panel .row { display: flex; gap: 6px; }
+  #panel .row .btn { text-align: center; }
+  #hud { position: fixed; left: 12px; top: 10px; z-index: 3; font: 12px/1.5 ui-monospace, Menlo, monospace;
+    color: #aeb4d4; white-space: pre; pointer-events: none; display: none; text-shadow: 0 0 3px #000; }
+  #note { position: fixed; left: 0; right: 0; bottom: 3.2vh; text-align: center; z-index: 3; font-size: 14px;
+    color: #7c80a8; pointer-events: none; transition: opacity 0.6s; opacity: 0; }
+  input[type=file] { display: none; }
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<div id="hud"></div>
+<div id="note"></div>
+<button id="gear" aria-label="instellingen">⚙</button>
+<div id="panel">
+  <button class="btn" data-act="hud">Debug-HUD</button>
+  <button class="btn" data-act="frame">Venster aan/uit</button>
+  <button class="btn" data-act="quality">Kwaliteit: auto</button>
+  <button class="btn" data-act="cal">Opnieuw kalibreren</button>
+  <button class="btn" data-act="break">Uitbraak (test)</button>
+  <button class="btn" data-act="glitch">Glitch (test)</button>
+  <button class="btn" data-act="parallax">Webcam-perspectief aan/uit</button>
+  <div class="row">
+    <button class="btn" data-act="file">Muziekbestand</button>
+    <button class="btn" data-act="full">Volledig scherm</button>
+  </div>
+  <div class="row">
+    <button class="btn" data-act="state" data-s="-1">auto</button>
+    <button class="btn" data-act="state" data-s="0">1</button><button class="btn" data-act="state" data-s="2">3</button>
+    <button class="btn" data-act="state" data-s="4">5</button><button class="btn" data-act="state" data-s="5">6</button>
+  </div>
+</div>
+<div id="start"><div class="box">
+  <h1>EVENT HORIZON</h1>
+  <p>Een digitale entiteit die luistert, meebeweegt met muziek en soms uit het scherm de kamer in komt.</p>
+  <button class="btn" id="btnMic">Start met microfoon<small>reageert op muziek en op je stem</small></button>
+  <label class="cb"><input type="checkbox" id="useCam" checked> ook frontcamera (perspectief volgt je hoofd)</label>
+  <button class="btn" id="btnFile">Kies een muziekbestand<small>werkt overal, ook als de microfoon geblokkeerd is</small></button>
+  <div id="msg"></div>
+</div></div>
+<input type="file" id="fileIn" accept="audio/*">
+
+<script>
+"use strict";
+// =====================================================================
+//  EVENT HORIZON // DIGITALE ENTITEIT — webversie (port van v10)
+// =====================================================================
+const CHUNK = 1024;
+const DEFAULTS = {
+  active_db: 9.0, inactive_db: 6.0, idle_delay: 3.0, awakening_time: 2.0, min_state_time: 1.2,
+  voice_enter: 0.50, voice_exit: 0.32, euphoria_enter: 0.58, euphoria_exit: 0.40,
+  echo_enter_db: 7.0, echo_exit_db: 4.0, glitch_cooldown: 5.0, calibration_seconds: 3.0,
+  fatigue_build_s: 360.0, fatigue_recover_s: 120.0, habituation_s: 90.0, surprise_cooldown: 4.0,
+  window_frame: true, frame_margin: 0.045, breakout: true, breakout_rate: 1.0, gestures: true,
+  parallax_strength: 1.0, webcam_mirror: false,
+};
+const T = Object.assign({}, DEFAULTS);
+const store = {
+  get(k, d) { try { const v = localStorage.getItem("eh_" + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem("eh_" + k, JSON.stringify(v)); } catch (e) {} },
+};
+Object.assign(T, store.get("tuning", {}));
+
+// ---------- hulpfuncties ----------
+const lerp = (a, b, t) => a + (b - a) * t;
+const clamp = (x, lo = 0, hi = 1) => x < lo ? lo : x > hi ? hi : x;
+const sf = (dt, tau) => 1 - Math.exp(-dt / Math.max(1e-4, tau));
+const powerDb = p => 10 * Math.log10(p + 1e-9);
+const mod = (a, n) => ((a % n) + n) % n;
+function hsv(h, s, v, out, o) {           // h graden, s/v 0..100 -> rgb 0..1 in out[o..o+2]
+  h = mod(h, 360) / 60; s = clamp(s, 0, 100) / 100; v = clamp(v, 0, 100) / 100;
+  const i = Math.floor(h) % 6, f = h - Math.floor(h);
+  const p = v * (1 - s), q = v * (1 - s * f), t = v * (1 - s * (1 - f));
+  let r, g, b;
+  switch (i) { case 0: r = v; g = t; b = p; break; case 1: r = q; g = v; b = p; break; case 2: r = p; g = v; b = t; break;
+    case 3: r = p; g = q; b = v; break; case 4: r = t; g = p; b = v; break; default: r = v; g = p; b = q; }
+  out[o] = r; out[o + 1] = g; out[o + 2] = b;
+}
+const _c = new Float32Array(3);
+const hsv1 = (h, s, v) => { hsv(h, s, v, _c, 0); return [_c[0], _c[1], _c[2]]; };
+
+// 3x3 matrices (rij-major arrays van 9)
+const M3 = {
+  mul(a, b) { const r = new Array(9);
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) r[i * 3 + j] = a[i * 3] * b[j] + a[i * 3 + 1] * b[3 + j] + a[i * 3 + 2] * b[6 + j];
+    return r; },
+  rx(a) { const c = Math.cos(a), s = Math.sin(a); return [1, 0, 0, 0, c, -s, 0, s, c]; },
+  ry(a) { const c = Math.cos(a), s = Math.sin(a); return [c, 0, s, 0, 1, 0, -s, 0, c]; },
+  rz(a) { const c = Math.cos(a), s = Math.sin(a); return [c, -s, 0, s, c, 0, 0, 0, 1]; },
+  id() { return [1, 0, 0, 0, 1, 0, 0, 0, 1]; },
+  apply(m, v) { return [m[0] * v[0] + m[1] * v[1] + m[2] * v[2], m[3] * v[0] + m[4] * v[1] + m[5] * v[2], m[6] * v[0] + m[7] * v[1] + m[8] * v[2]]; },
+};
+const rotation = (ax, ay, az) => M3.mul(M3.rz(az), M3.mul(M3.ry(ay), M3.rx(ax)));   // gelijk aan rotate_3d
+function matToQuat(m) {
+  const tr = m[0] + m[4] + m[8]; let q;
+  if (tr > 0) { const s = Math.sqrt(tr + 1) * 2; q = [0.25 * s, (m[7] - m[5]) / s, (m[2] - m[6]) / s, (m[3] - m[1]) / s]; }
+  else if (m[0] > m[4] && m[0] > m[8]) { const s = Math.sqrt(1 + m[0] - m[4] - m[8]) * 2; q = [(m[7] - m[5]) / s, 0.25 * s, (m[1] + m[3]) / s, (m[2] + m[6]) / s]; }
+  else if (m[4] > m[8]) { const s = Math.sqrt(1 + m[4] - m[0] - m[8]) * 2; q = [(m[2] - m[6]) / s, (m[1] + m[3]) / s, 0.25 * s, (m[5] + m[7]) / s]; }
+  else { const s = Math.sqrt(1 + m[8] - m[0] - m[4]) * 2; q = [(m[3] - m[1]) / s, (m[2] + m[6]) / s, (m[5] + m[7]) / s, 0.25 * s]; }
+  const n = Math.hypot(...q); return q.map(x => x / n);
+}
+function quatToMat(q) {
+  const [w, x, y, z] = q;
+  return [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w),
+          2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w),
+          2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)];
+}
+function slerp(a, b, t) {
+  let d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+  if (d < 0) { b = b.map(x => -x); d = -d; }
+  if (d > 0.9995) { const q = a.map((x, i) => x + t * (b[i] - x)); const n = Math.hypot(...q); return q.map(x => x / n); }
+  const th = Math.acos(d), s = Math.sin(th);
+  return a.map((x, i) => (Math.sin((1 - t) * th) * x + Math.sin(t * th) * b[i]) / s);
+}
+function rotFromTo(a, b) {
+  const na = Math.hypot(...a), nb = Math.hypot(...b); a = a.map(x => x / na); b = b.map(x => x / nb);
+  const v = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const c = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  if (c < -0.9999) return M3.ry(Math.PI);
+  const vx = [0, -v[2], v[1], v[2], 0, -v[0], -v[1], v[0], 0], vx2 = M3.mul(vx, vx), k = 1 / (1 + c);
+  return [0, 1, 2, 3, 4, 5, 6, 7, 8].map(i => (i % 4 === 0 ? 1 : 0) + vx[i] + vx2[i] * k);
+}
+
+// ---------- FFT (radix-2, in place) ----------
+const fftCache = {};
+function fft(re, im) {
+  const n = re.length;
+  let tw = fftCache[n];
+  if (!tw) {
+    const cs = new Float64Array(n / 2), sn = new Float64Array(n / 2), rev = new Uint32Array(n);
+    for (let i = 0; i < n / 2; i++) { cs[i] = Math.cos(-2 * Math.PI * i / n); sn[i] = Math.sin(-2 * Math.PI * i / n); }
+    const bits = Math.log2(n);
+    for (let i = 0; i < n; i++) { let r = 0; for (let b = 0; b < bits; b++) r |= ((i >> b) & 1) << (bits - 1 - b); rev[i] = r; }
+    tw = fftCache[n] = { cs, sn, rev };
+  }
+  const { cs, sn, rev } = tw;
+  for (let i = 0; i < n; i++) { const j = rev[i]; if (j > i) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; } }
+  for (let size = 2; size <= n; size <<= 1) {
+    const half = size >> 1, step = n / size;
+    for (let st = 0; st < n; st += size) for (let k = 0; k < half; k++) {
+      const wr = cs[k * step], wi = sn[k * step], a = st + k, b = a + half;
+      const tr = re[b] * wr - im[b] * wi, ti = re[b] * wi + im[b] * wr;
+      re[b] = re[a] - tr; im[b] = im[a] - ti; re[a] += tr; im[a] += ti;
+    }
+  }
+}
+const hann = n => { const w = new Float64Array(n); for (let i = 0; i < n; i++) w[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (n - 1)); return w; };
+const median = arr => { if (!arr.length) return 0; const a = Array.from(arr).sort((x, y) => x - y); const m = a.length >> 1; return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2; };
+const mean = a => a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0;
+const std = a => { if (!a.length) return 0; const m = mean(a); return Math.sqrt(a.reduce((s, x) => s + (x - m) * (x - m), 0) / a.length); };
+const percentile = (a, p) => { const s = Array.from(a).sort((x, y) => x - y); const i = (s.length - 1) * p / 100, lo = Math.floor(i), hi = Math.ceil(i); return lo === hi ? s[lo] : s[lo] + (s[hi] - s[lo]) * (i - lo); };
+
+class TimedSeries {
+  constructor(span) { this.span = span; this.t = []; this.v = []; }
+  add(t, v) { this.t.push(t); this.v.push(v); while (this.t.length && t - this.t[0] > this.span) { this.t.shift(); this.v.shift(); } }
+  last(sec) { if (!this.t.length) return []; const te = this.t[this.t.length - 1]; const out = []; for (let i = 0; i < this.t.length; i++) if (te - this.t[i] <= sec) out.push(this.v[i]); return out; }
+  get length() { return this.t.length; }
+}
+
+// ---------- STATES ----------
+const IDLE = 0, AWAKENING = 1, ATTENTIVE = 2, ECHO = 3, ZEN = 4, EUPHORIA = 5;
+const LABELS = [["Energetisch", "Slaap / Standby"], ["Energetisch", "Ontwaakt"], ["Interactief", "Actief Luisteren"],
+                ["Interactief", "Echo / Spiegeling"], ["Sferisch", "Zen / Kosmische Meditatie"], ["Sferisch", "Euforie / Hyperdrive"]];
+const VOICE = s => s === ATTENTIVE || s === ECHO, MUSIC = s => s === ZEN || s === EUPHORIA;
+const PROFILES = [
+  { beat: 0, snap: 0, melody: 0, hue: 245, hue_wander: 6, spread: 0.25, sat: 0.9, bright: 0.5, whitehot: 0, tempo: 0.35, rot: 0.25, drift: 0.35, spin: 0.25, react: 0.15,
+    breath_amp: 26, breath_speed: 0.9, gap: 46, spikes: 0.2, jet: 0.05, dust: 0.15, trail: 0.8, pulse: 0, mirror: 0, approach: 0, focus: 0 },
+  { beat: 0.3, snap: 0.4, melody: 0.2, hue: 205, hue_wander: 20, spread: 0.5, sat: 0.8, bright: 0.95, whitehot: 0.1, tempo: 1.0, rot: 0.9, drift: 0.6, spin: 1.5, react: 0.8,
+    breath_amp: 6, breath_speed: 3.0, gap: 16, spikes: 0.8, jet: 0.9, dust: 1.4, trail: 1.0, pulse: 0.3, mirror: 0, approach: 0.1, focus: 0 },
+  { beat: 0.1, snap: 0.3, melody: 0, hue: 158, hue_wander: 10, spread: 0.3, sat: 0.75, bright: 0.9, whitehot: 0, tempo: 0.45, rot: 0.12, drift: 0.05, spin: 0.35, react: 0.35,
+    breath_amp: 10, breath_speed: 1.6, gap: 34, spikes: 0.25, jet: 0.15, dust: 0.2, trail: 0.9, pulse: 1.0, mirror: 0.35, approach: 1.0, focus: 1.0 },
+  { beat: 0.1, snap: 0.3, melody: 0, hue: 178, hue_wander: 10, spread: 0.3, sat: 0.7, bright: 0.95, whitehot: 0, tempo: 0.45, rot: 0.12, drift: 0.05, spin: 0.4, react: 0.35,
+    breath_amp: 6, breath_speed: 1.6, gap: 34, spikes: 0.25, jet: 0.2, dust: 0.2, trail: 0.9, pulse: 0.7, mirror: 1.0, approach: 1.0, focus: 0.8 },
+  { beat: 0.45, snap: 0.35, melody: 1.0, hue: 292, hue_wander: 30, spread: 0.5, sat: 0.65, bright: 0.85, whitehot: 0, tempo: 0.6, rot: 0.6, drift: 0.9, spin: 0.6, react: 0.8,
+    breath_amp: 18, breath_speed: 1.0, gap: 40, spikes: 0.12, jet: 0.3, dust: 0.5, trail: 0.65, pulse: 0.1, mirror: 0, approach: 0, focus: 0 },
+  { beat: 1.0, snap: 1.0, melody: 0.5, hue: 36, hue_wander: 18, spread: -0.35, sat: 0.95, bright: 1.1, whitehot: 0.8, tempo: 1.5, rot: 1.4, drift: 1.0, spin: 2.0, react: 1.7,
+    breath_amp: 6, breath_speed: 3.5, gap: 40, spikes: 1.5, jet: 1.9, dust: 1.8, trail: 1.15, pulse: 0.2, mirror: 0, approach: 0, focus: 0 },
+];
+const KEYS = Object.keys(PROFILES[0]);
+const ANCHORS = [[0, 0.35], [0.72, 0.55], [0.32, 1.0], [0.6, 0.82], [0.3, 0], [1.0, 0]];
+const SIGMA = 0.12;
+const TAU = [3.5, 1.0, 1.5, 1.0, 3.0, 1.8];
+const DWELL = [0, 0.1, 0.9, 0.8, 2.0, 1.5];
+
+// ---------- SPRAAKDETECTIE (Silero via onnxruntime-web, als beschikbaar) ----------
+class VoiceDetector {
+  constructor() { this.backend = "heuristic"; this.prob = 0; this.buf = []; this.res = []; this.busy = false; }
+  async init(rate) {
+    this.rate = rate;
+    try {
+      if (!window.ort) await loadScript("https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js");
+      ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
+      ort.env.wasm.numThreads = 1;
+      this.sess = await ort.InferenceSession.create("silero_vad.onnx", { executionProviders: ["wasm"] });
+      this.state = new ort.Tensor("float32", new Float32Array(256), [2, 1, 128]);
+      this.ctx = new Float32Array(64);
+      this.sr = new ort.Tensor("int64", BigInt64Array.from([16000n]), []);
+      this.backend = "silero";
+    } catch (e) { console.warn("Silero niet beschikbaar:", e); this.backend = "heuristic"; }
+  }
+  push(samples) {            // samples: Float32Array (-1..1) op this.rate
+    if (this.backend !== "silero") return;
+    const f = this.rate / 16000;
+    for (let i = 0; i < samples.length; i++) this.res.push(samples[i]);
+    if (Number.isInteger(f)) {
+      const n = Math.floor(this.res.length / f) * f;
+      for (let i = 0; i < n; i += f) { let s = 0; for (let k = 0; k < f; k++) s += this.res[i + k]; this.buf.push(s / f); }
+      this.res = this.res.slice(n);
+    } else {
+      const nOut = Math.floor((this.res.length - 1) / f);
+      for (let i = 0; i < nOut; i++) { const p = i * f, i0 = Math.floor(p), a = p - i0; this.buf.push(this.res[i0] * (1 - a) + this.res[i0 + 1] * a); }
+      this.res = this.res.slice(Math.floor(nOut * f));
+    }
+    if (this.buf.length > 512 * 8) this.buf = this.buf.slice(-512 * 8);
+    this._pump();
+  }
+  async _pump() {
+    if (this.busy) return;
+    this.busy = true;
+    try {
+      while (this.buf.length >= 512) {
+        const chunk = this.buf.splice(0, 512);
+        const inp = new Float32Array(576); inp.set(this.ctx, 0); inp.set(chunk, 64);
+        const out = await this.sess.run({ input: new ort.Tensor("float32", inp, [1, 576]), state: this.state, sr: this.sr });
+        this.state = out.stateN; this.ctx = inp.slice(512);
+        this.prob = lerp(this.prob, out.output.data[0], 0.3);
+      }
+    } catch (e) { console.warn(e); this.backend = "heuristic"; }
+    this.busy = false;
+  }
+}
+function loadScript(src) {
+  return new Promise((res, rej) => { const s = document.createElement("script"); s.src = src; s.onload = res; s.onerror = () => rej(new Error("laden mislukt: " + src)); document.head.appendChild(s); });
+}
+
+// ---------- AUDIO-ANALYSE ----------
+class Analyzer {
+  constructor(rate) {
+    this.rate = rate;
+    const binHz = rate / CHUNK;
+    const bins = (lo, hi) => [Math.max(1, Math.round(lo / binHz)), Math.round(hi / binHz) + 1];
+    this.BASS = bins(35, 250); this.VOICE = bins(300, 3400); this.TREBLE = bins(3400, 11000);
+    this.VIS_B = bins(43, 258); this.VIS_M = bins(258, 1077); this.VIS_H = bins(1077, 3445);
+    const top = Math.floor(11000 / binHz), e = [];
+    for (let i = 0; i < 25; i++) e.push(Math.floor(2 * Math.pow(top / 2, i / 24)));
+    this.edges = [...new Set(e)];
+    this.win = hann(CHUNK); this.win2 = hann(1024);
+    this.re = new Float64Array(CHUNK); this.im = new Float64Array(CHUNK);
+    this.spec = new Float64Array(CHUNK / 2 + 1); this.power = new Float64Array(CHUNK / 2 + 1);
+    this.t = 0;
+    const cal = store.get("cal", null);
+    this.storedFloor = cal && cal.rate === rate ? cal.floor : null;
+    this.floor = this.storedFloor ? this.storedFloor.slice() : null;
+    this.excess = [0, 0, 0];
+    this.totalHist = new TimedSeries(4); this.voiceHist = new TimedSeries(1.6); this.voiceHist4 = new TimedSeries(4); this.bassHist = new TimedSeries(1.6);
+    this.levelHist = new TimedSeries(5); this.levelSmooth = null;
+    this.onsets = []; this.lastOnset = -1; this.bassRef = null; this.voiceRef = null;
+    this.prevLog = null; this.specShort = null; this.specLong = null; this.specHab = null;
+    this.spectralChange = 0; this.scRef = 1; this.novelty = 0; this.fluxMean = 1e-3; this.fluxRatio = 1;
+    this.stationary = false; this.onsetRate = 0; this.activityDb = 0; this.actRef = 0; this.activity = 0;
+    this.voiceScore = 0; this.intensity = 0; this.voiceEnv = 0; this.voiceLevel = null; this.voiceMean = null;
+    this.voiceDev = 0; this.voicedTime = 0; this.talkHist = new TimedSeries(1.5); this.loudNorm = 0.5; this.quietTime = 0;
+    this.glitchEvent = false; this.surpriseEvent = false; this.calUntil = null; this.calLevels = []; this.calStatus = "";
+    this.beatHist = []; this.beatEvent = 0; this.beatPredicted = false; this.period = 0.47; this.beatPhase = 0; this.tempoConf = 0;
+    this.trebleRef = null; this.lastHat = -1; this.hatEvent = 0; this.centroid = 0.5;
+    this.pitch = 0; this.inUtt = false; this.uttVoiced = 0; this.lastVoiced = -10; this.uttPitch = []; this.uttDev = [];
+    this.bcFired = true; this.backchannel = false; this.turnEnd = null;
+  }
+  get calibrating() { return this.calUntil !== null; }
+  startCalibration(sec) { this.calUntil = this.t + sec; this.calLevels = []; }
+  get bpm() { return 60 / Math.max(0.25, this.period); }
+  _finishCal() {
+    const lv = this.calLevels; this.calUntil = null;
+    if (lv.length < 10) { this.calStatus = "te kort"; return; }
+    const measured = [0, 1, 2].map(i => percentile(lv.map(l => l[i]), 10));
+    const spread = mean([0, 1, 2].map(i => percentile(lv.map(l => l[i]), 90) - measured[i]));
+    const prev = this.storedFloor;
+    if (prev && measured.some((m, i) => m - prev[i] > 8)) { this.floor = prev.slice(); this.calStatus = "te lawaaiig, vorige kalibratie behouden"; return; }
+    if (!prev && spread > 12) { this.floor = measured.map(m => m - 20); this.calStatus = "onrustig gemeten — kalibreer in stilte"; return; }
+    this.floor = measured; this.storedFloor = measured.slice();
+    store.set("cal", { rate: this.rate, floor: measured.map(v => Math.round(v * 100) / 100) });
+    this.calStatus = "ok";
+  }
+  _onBeat() {
+    this.beatHist.push(this.t);
+    while (this.beatHist.length && this.t - this.beatHist[0] > 8) this.beatHist.shift();
+    if (this.beatHist.length >= 4) {
+      const f = [];
+      for (let i = 1; i < this.beatHist.length; i++) { let ioi = this.beatHist[i] - this.beatHist[i - 1]; while (ioi > 0.857) ioi /= 2; while (ioi < 0.3) ioi *= 2; f.push(ioi); }
+      const med = median(f);
+      this.tempoConf = f.filter(x => Math.abs(x - med) / med < 0.08).length / f.length;
+      if (this.tempoConf > 0.4) this.period = lerp(this.period, med, 0.25);
+    }
+    const err = this.beatPhase < 0.5 ? this.beatPhase : this.beatPhase - 1;
+    this.beatPhase = mod(this.beatPhase - err * (this.tempoConf > 0.4 ? 0.6 : 1.0), 1);
+  }
+  _advanceTempo(dt, active) {
+    this.beatPredicted = false;
+    this.beatPhase += dt / Math.max(0.25, this.period);
+    if (this.beatPhase >= 1) {
+      this.beatPhase -= 1;
+      const recent = this.t - this.lastOnset < 2.2 * this.period;
+      if (active && recent && this.tempoConf > 0.55 && this.t - this.lastOnset > 0.12) this.beatPredicted = true;
+    }
+    if (this.t - this.lastOnset > 4) this.tempoConf *= 1 - sf(dt, 1);
+  }
+  _pitch(x) {                       // x: 2048 samples
+    const f = this.rate % 24000 === 0 ? this.rate / 24000 : 0;
+    const n = 1024, y = new Float64Array(n); let sr;
+    if (f >= 2) { for (let i = 0; i < n; i++) { let s = 0; for (let k = 0; k < f; k++) s += x[x.length - n * f + i * f + k] || 0; y[i] = s / f; } sr = this.rate / f; }
+    else { for (let i = 0; i < n; i++) y[i] = x[x.length - 2048 + i * 2]; sr = this.rate / 2; }
+    const m = mean(y);
+    const re = new Float64Array(2 * n), im = new Float64Array(2 * n);
+    for (let i = 0; i < n; i++) re[i] = (y[i] - m) * this.win2[i];
+    fft(re, im);
+    for (let i = 0; i < 2 * n; i++) { re[i] = re[i] * re[i] + im[i] * im[i]; im[i] = 0; }
+    fft(re, im);                    // spectrum is reëel en symmetrisch: forward == inverse * N
+    const r0 = re[0]; if (r0 <= 0) return 0;
+    const lo = Math.floor(sr / 400), hi = Math.min(Math.floor(sr / 75), n - 2);
+    let k = lo, best = -1;
+    for (let i = lo; i < hi; i++) if (re[i] > best) { best = re[i]; k = i; }
+    if (best / r0 < 0.45) return 0;
+    const a = re[k - 1] / r0, b = re[k] / r0, c = re[k + 1] / r0, den = a - 2 * b + c;
+    const shift = Math.abs(den) > 1e-9 ? 0.5 * (a - c) / den : 0;
+    return sr / (k + shift);
+  }
+  _turns(dt, ev, vad, x) {
+    this.backchannel = false; this.turnEnd = null;
+    const voiced = vad.backend !== "heuristic" ? (ev > 8 && vad.prob > 0.4) : (ev > 8 && this.voiceScore > 0.35);
+    this.pitch = voiced ? this._pitch(x) : 0;
+    if (voiced) {
+      if (!this.inUtt) { this.inUtt = true; this.uttVoiced = 0; this.uttPitch = []; this.uttDev = []; }
+      this.uttVoiced += dt; this.lastVoiced = this.t; this.bcFired = false;
+      if (this.pitch > 75 && this.pitch < 400) this.uttPitch.push([this.t, this.pitch]);
+      this.uttDev.push(this.voiceDev);
+      return;
+    }
+    if (!this.inUtt) return;
+    const pause = this.t - this.lastVoiced;
+    if (!this.bcFired && pause > 0.3 && pause < 0.7 && this.uttVoiced > 1.0) { this.backchannel = true; this.bcFired = true; }
+    if (pause > 0.85) {
+      this.inUtt = false;
+      const pts = this.uttPitch; let rise = 1;
+      if (pts.length >= 8) {
+        const tEnd = pts[pts.length - 1][0], tail = pts.filter(p => tEnd - p[0] <= 0.4).map(p => p[1]);
+        if (tail.length >= 3) rise = median(tail) / median(pts.map(p => p[1]));
+      }
+      this.turnEnd = { duration: this.uttVoiced, rise, loud: mean(this.uttDev), pitch: pts.length ? median(pts.map(p => p[1])) : 0 };
+    }
+  }
+  process(x2048, dt, vad) {
+    this.t += dt;
+    const x = x2048.subarray(x2048.length - CHUNK), re = this.re, im = this.im;
+    for (let i = 0; i < CHUNK; i++) { re[i] = x[i] * this.win[i]; im[i] = 0; }
+    fft(re, im);
+    const spec = this.spec, power = this.power;
+    for (let i = 0; i <= CHUNK / 2; i++) { const p = re[i] * re[i] + im[i] * im[i]; power[i] = p; spec[i] = Math.sqrt(p); }
+    const sum = ([a, b]) => { let s = 0; for (let i = a; i < b; i++) s += power[i]; return s; };
+    const pb = sum(this.BASS), pv = sum(this.VOICE), pt = sum(this.TREBLE);
+    const levels = [powerDb(pb), powerDb(pv), powerDb(pt)], totalDb = powerDb(pb + pv + pt);
+    if (this.calibrating) { this.calLevels.push(levels.slice()); if (this.t >= this.calUntil) this._finishCal(); }
+
+    const bandDb = []; for (let i = 0; i < this.edges.length - 1; i++) { let s = 0; for (let k = this.edges[i]; k < this.edges[i + 1]; k++) s += power[k]; bandDb.push(10 * Math.log10(s + 1e-9)); }
+    if (!this.specShort) { this.specShort = bandDb.slice(); this.specLong = bandDb.slice(); this.specHab = bandDb.slice(); }
+    let sc = 0, nv = 0;
+    for (let i = 0; i < bandDb.length; i++) {
+      this.specShort[i] += (bandDb[i] - this.specShort[i]) * sf(dt, 0.4);
+      this.specLong[i] += (bandDb[i] - this.specLong[i]) * sf(dt, 4);
+      this.specHab[i] += (bandDb[i] - this.specHab[i]) * sf(dt, 45);
+      sc += Math.abs(this.specShort[i] - this.specLong[i]); nv += Math.abs(this.specShort[i] - this.specHab[i]);
+    }
+    this.spectralChange = sc / bandDb.length; this.novelty = nv / bandDb.length;
+
+    const tTop = this.TREBLE[1], logspec = new Float64Array(tTop - 1);
+    for (let i = 1; i < tTop; i++) logspec[i - 1] = Math.log1p(spec[i]);
+    let flux = 0;
+    if (this.prevLog) { for (let i = 0; i < logspec.length; i++) flux += Math.max(logspec[i] - this.prevLog[i], 0); flux /= logspec.length; }
+    this.prevLog = logspec;
+    this.fluxMean += (flux - this.fluxMean) * sf(dt, 2); this.fluxRatio = flux / Math.max(this.fluxMean, 1e-4);
+
+    this.totalHist.add(this.t, totalDb);
+    const tv = this.totalHist.v, longStd = tv.length > 20 ? std(tv) : 99;
+    this.stationary = longStd < 3 && this.onsetRate < 0.3 && this.spectralChange < 1.0;
+    if (!this.floor) this.floor = levels.slice();
+    if (!this.levelSmooth) this.levelSmooth = levels.slice();
+    for (let i = 0; i < 3; i++) this.levelSmooth[i] += (levels[i] - this.levelSmooth[i]) * sf(dt, 0.15);
+    this.levelHist.add(this.t, this.levelSmooth.slice());
+    if (!this.calibrating) {
+      const winMin = [0, 1, 2].map(i => Math.min(...this.levelHist.v.map(v => v[i])));
+      for (let i = 0; i < 3; i++) {
+        let tau;
+        if (levels[i] < this.floor[i]) tau = 0.5;
+        else if (this.stationary) tau = 3;
+        else if (winMin[i] - this.floor[i] < 12 && this.levelHist.length > 30) {
+          const tg = winMin[i] + 1.5; if (tg > this.floor[i]) this.floor[i] += (tg - this.floor[i]) * sf(dt, 2.5); continue;
+        } else tau = 180;
+        this.floor[i] += (levels[i] - this.floor[i]) * sf(dt, tau);
+      }
+    }
+    this.excess = levels.map((l, i) => l - this.floor[i]);
+    const [eb, ev, et] = this.excess;
+    this.activityDb = this.calibrating ? 0 : Math.max(ev, et, eb - 6);
+    const target = clamp((this.activityDb - T.active_db) / 12);
+    this.activity += (target - this.activity) * sf(dt, target > this.activity ? 0.08 : 0.6);
+    const active = this.activityDb > T.inactive_db;
+    this.quietTime = active ? 0 : this.quietTime + dt;
+    const longQuiet = this.quietTime > 1.5;
+
+    const audible = this.activityDb > T.active_db + 4;
+    const recentMean = tv.length > 30 ? mean(tv.slice(0, -1)) : totalDb;
+    this.surpriseEvent = audible && ((this.activityDb - this.actRef > 15) || (totalDb - recentMean > 10 && this.fluxRatio > 2.5) || (this.spectralChange > this.scRef * 2 + 3));
+    this.actRef = lerp(this.actRef, this.activityDb, sf(dt, 1)); this.scRef = lerp(this.scRef, this.spectralChange, sf(dt, 3));
+
+    if (this.bassRef === null) { this.bassRef = levels[0]; this.voiceRef = levels[1]; }
+    const bassRise = levels[0] - this.bassRef, voiceRise = levels[1] - this.voiceRef;
+    const recentV = this.voiceHist.last(0.3);
+    const sounding = recentV.length > 0 && Math.min(...recentV) > 8;
+    this.beatEvent = 0;
+    if (bassRise > 5 && bassRise - voiceRise > 2 && eb > 8 && sounding && this.t - this.lastOnset > 0.18) {
+      this.onsets.push(this.t); this.lastOnset = this.t;
+      this.beatEvent = clamp(0.55 + (bassRise - 5) / 12, 0.55, 1); this._onBeat();
+    }
+    this.bassRef = lerp(this.bassRef, levels[0], sf(dt, 0.08)); this.voiceRef = lerp(this.voiceRef, levels[1], sf(dt, 0.08));
+    while (this.onsets.length && this.t - this.onsets[0] > 3) this.onsets.shift();
+    this.onsetRate = this.onsets.length / 3;
+    this._advanceTempo(dt, active);
+
+    if (this.trebleRef === null) this.trebleRef = levels[2];
+    this.hatEvent = 0;
+    const tRise = levels[2] - this.trebleRef;
+    if (tRise > 6 && et > 10 && this.t - this.lastHat > 0.07) { this.hatEvent = clamp(0.4 + (tRise - 6) / 12, 0.4, 1); this.lastHat = this.t; }
+    this.trebleRef = lerp(this.trebleRef, levels[2], sf(dt, 0.05));
+
+    if (active) {
+      let pw = 0, pf = 0; const binHz = this.rate / CHUNK;
+      for (let i = 1; i < tTop; i++) { pw += power[i]; pf += power[i] * i * binHz; }
+      if (pw > 0) { const cent = pf / pw; const cn = clamp((Math.log2(Math.max(cent, 50)) - Math.log2(300)) / (Math.log2(4000) - Math.log2(300))); this.centroid = lerp(this.centroid, cn, sf(dt, 0.3)); }
+    }
+
+    this.voiceHist.add(this.t, ev); this.voiceHist4.add(this.t, ev); this.bassHist.add(this.t, eb);
+    const vh = this.voiceHist.v, stdV = std(vh), pause = vh.filter(v => v < 5).length / Math.max(1, vh.length);
+    const pauseScore = clamp(pause / 0.1) * clamp((0.9 - pause) / 0.25);
+    const beatPenalty = clamp(1 - this.onsetRate / 2);
+    let voiceRaw;
+    if (vad.backend !== "heuristic") {
+      const v4 = this.voiceHist4.v, p4 = v4.filter(v => v < 5).length / Math.max(1, v4.length), pause4 = clamp(p4 / 0.08) * clamp((0.9 - p4) / 0.25);
+      voiceRaw = vad.prob * clamp(0.35 + Math.max(pauseScore, pause4)) * (0.6 + 0.4 * beatPenalty);
+    }
+    else {
+      const modS = clamp((stdV - 3.5) / 6), ratioV = pv / (pb + pv + pt + 1e-9), shapeS = clamp((ratioV - 0.35) / 0.4);
+      voiceRaw = pauseScore * (0.4 + 0.6 * modS) * (0.7 + 0.3 * shapeS) * (0.5 + 0.5 * beatPenalty);
+    }
+    if (active) this.voiceScore += (voiceRaw - this.voiceScore) * sf(dt, 0.8);
+    else if (longQuiet) this.voiceScore *= 1 - sf(dt, 4);
+
+    const stdB = std(this.bassHist.v), continuity = clamp(1 - pause * 1.5);
+    const punch = clamp((stdB - 2) / 6) * clamp(1 - (stdV - 6) / 8);
+    const notSpeech = vad.backend !== "heuristic" ? 1 - 0.85 * vad.prob : 1;
+    const intRaw = continuity * notSpeech * (0.40 * clamp(this.onsetRate / 2.2) + 0.30 * punch + 0.15 * clamp((eb - 10) / 25) + 0.15 * clamp((et - 8) / 25));
+    if (active) this.intensity += (intRaw - this.intensity) * sf(dt, 1.5);
+    else if (longQuiet) this.intensity *= 1 - sf(dt, 4);
+
+    const vT = clamp((ev - 4) / 25);
+    this.voiceEnv += (vT - this.voiceEnv) * sf(dt, vT > this.voiceEnv ? 0.03 : 0.12);
+    const talking = vad.backend !== "heuristic" ? vad.prob > 0.4 : this.voiceScore > 0.35;
+    if (ev > 5 && talking) {            // stemvolume alleen leren als er echt gepraat wordt
+      this.voicedTime += dt; this.talkHist.add(this.t, ev);
+      this.voiceLevel = percentile(this.talkHist.v, 80);   // lettergrepen uitgemiddeld
+      if (this.voiceMean === null) { if (this.voicedTime >= 1.0) this.voiceMean = this.voiceLevel; }
+      else this.voiceMean = lerp(this.voiceMean, this.voiceLevel, sf(dt, Math.min(20, 2 + this.voicedTime)));
+    }
+    if (this.voiceLevel !== null && this.voiceMean !== null) { this.voiceDev += ((this.voiceLevel - this.voiceMean) - this.voiceDev) * sf(dt, 0.3); this.loudNorm = clamp((this.voiceDev + 9) / 18); }
+
+    this._turns(dt, ev, vad, x2048);
+    const longMean = mean(tv);
+    this.glitchEvent = active && ((this.fluxRatio > 3 && (eb > 12 || et > 12) && this.intensity > 0.4) || (totalDb - longMean > 9 && this.intensity > 0.3));
+  }
+}
+
+// ---------- INNERLIJK LEVEN + STEMMING ----------
+class InnerLife {
+  constructor() { this.fatigue = 0; this.habituation = 0; this.surprise = 0; this.cd = 0; }
+  update(state, a, dt) {
+    if (state === EUPHORIA || state === AWAKENING) this.fatigue += dt / T.fatigue_build_s * (0.5 + 0.5 * a.intensity);
+    else if (state === IDLE) this.fatigue -= dt / (T.fatigue_recover_s * 0.5);
+    else this.fatigue -= dt / T.fatigue_recover_s;
+    this.fatigue = clamp(this.fatigue);
+    let target, tau;
+    if (a.activityDb > T.inactive_db) { target = 1 - clamp((a.novelty - 1.5) / 5); tau = target > this.habituation ? T.habituation_s : 4; }
+    else { target = 0; tau = 30; }
+    this.habituation += (target - this.habituation) * sf(dt, tau);
+    this.cd -= dt;
+    if (a.surpriseEvent && this.cd <= 0 && !a.calibrating) { this.surprise = state === IDLE ? 0.35 : 1; this.cd = T.surprise_cooldown; }
+    else this.surprise *= 1 - sf(dt, 0.8);
+  }
+}
+class Mood {
+  constructor() {
+    this.state = IDLE; this.inState = 0; this.cand = IDLE; this.candTime = 0; this.inactive = T.idle_delay + 1; this.activeTime = 0;
+    this.forced = null; this.life = new InnerLife(); this.point = ANCHORS[IDLE].slice(); this.eff = this.point.slice();
+    this.weights = [1, 0, 0, 0, 0, 0]; this.params = Object.assign({}, PROFILES[IDLE]);
+    this.glitch = 0; this.glitchHold = 0; this.glitchCd = 0; this.forceGlitch = false;
+  }
+  classify(a) {
+    const inVoice = VOICE(this.state);
+    if (inVoice && a.quietTime > 0.25) return this.state;
+    if (a.voiceScore > (inVoice ? T.voice_exit : T.voice_enter)) {
+      const dev = a.voicedTime > 3.0 ? Math.abs(a.voiceDev) : 0;
+      if (this.state === ECHO) return dev > T.echo_exit_db ? ECHO : ATTENTIVE;
+      return dev > T.echo_enter_db ? ECHO : ATTENTIVE;
+    }
+    if (this.state === EUPHORIA) return a.intensity > T.euphoria_exit ? EUPHORIA : ZEN;
+    if (this.state === ZEN) return a.intensity > T.euphoria_enter ? EUPHORIA : ZEN;
+    return a.intensity > (T.euphoria_enter + T.euphoria_exit) / 2 ? EUPHORIA : ZEN;
+  }
+  candidate(a) {
+    if (this.forced !== null) return this.forced;
+    if (this.inactive > T.idle_delay) return IDLE;
+    if (this.state === IDLE) return this.activeTime > 0.3 ? AWAKENING : IDLE;
+    if (this.state === AWAKENING) {
+      const undecided = T.voice_exit < a.voiceScore && a.voiceScore < T.voice_enter;
+      if (this.inState < T.awakening_time || (undecided && this.inState < 4)) return AWAKENING;
+    }
+    return this.classify(a);
+  }
+  update(a, dt) {
+    if (a.activityDb > T.active_db) { this.activeTime += dt; this.inactive = 0; }
+    else { this.activeTime = Math.max(0, this.activeTime - dt * 0.5); if (a.activityDb < T.inactive_db) this.inactive += dt; }
+    this.inState += dt;
+    const c = this.candidate(a);
+    if (c === this.state) { this.cand = c; this.candTime = 0; }
+    else {
+      if (c !== this.cand) { this.cand = c; this.candTime = 0; }
+      this.candTime += dt;
+      let dwell = this.state === AWAKENING ? 0.6 : DWELL[c];
+      if (VOICE(this.state) && MUSIC(c)) dwell = Math.max(dwell, 3.0);
+      const minHold = (this.forced !== null || c === IDLE || c === AWAKENING) ? 0 : T.min_state_time;
+      if (this.forced !== null) dwell = 0;
+      if (this.candTime >= dwell && this.inState >= minHold) { this.state = c; this.inState = 0; this.candTime = 0; }
+    }
+    this.life.update(this.state, a, dt);
+    let [ar, warm] = ANCHORS[this.state];
+    if (this.state === ZEN) ar = 0.22 + 0.28 * clamp(a.intensity / Math.max(1e-3, T.euphoria_enter));
+    else if (this.state === EUPHORIA) ar = 0.85 + 0.15 * clamp((a.intensity - T.euphoria_exit) / Math.max(1e-3, 1 - T.euphoria_exit));
+    ar -= Math.min(0.22, 0.3 * this.life.fatigue + 0.1 * this.life.habituation);
+    const f = sf(dt, TAU[this.state]);
+    this.point[0] += (clamp(ar) - this.point[0]) * f; this.point[1] += (warm - this.point[1]) * f;
+    this.eff = [clamp(this.point[0] + 0.4 * this.life.surprise), this.point[1]];
+    // mengsel van profielen
+    const lw = ANCHORS.map(an => -((this.eff[0] - an[0]) ** 2 + (this.eff[1] - an[1]) ** 2) / (2 * SIGMA * SIGMA));
+    const mx = Math.max(...lw); let w = lw.map(v => Math.exp(v - mx)); const tot = w.reduce((s, v) => s + v, 0); w = w.map(v => v / tot);
+    this.weights = w;
+    const out = {};
+    for (const k of KEYS) {
+      if (k === "hue") { let cx = 0, cy = 0; for (let i = 0; i < 6; i++) { cx += w[i] * Math.cos(PROFILES[i].hue * Math.PI / 180); cy += w[i] * Math.sin(PROFILES[i].hue * Math.PI / 180); } out.hue = mod(Math.atan2(cy, cx) * 180 / Math.PI, 360); }
+      else { let s = 0; for (let i = 0; i < 6; i++) s += w[i] * PROFILES[i][k]; out[k] = s; }
+    }
+    const L = this.life;
+    out.react *= 1 - 0.35 * L.habituation; out.tempo *= 1 - 0.3 * L.fatigue;
+    out.spin = out.spin * (1 - 0.3 * L.fatigue) + 1.2 * L.surprise; out.jet *= 1 - 0.4 * L.fatigue;
+    out.gap -= 18 * L.surprise; out.bright += 0.25 * L.surprise;
+    this.params = out;
+    this.glitchCd -= dt;
+    if (this.forceGlitch || (a.glitchEvent && MUSIC(this.state) && this.glitchCd <= 0)) { this.glitchHold = 0.2; this.glitchCd = T.glitch_cooldown; this.forceGlitch = false; }
+    if (this.glitchHold > 0) { this.glitchHold -= dt; this.glitch = lerp(this.glitch, 1, sf(dt, 0.04)); }
+    else this.glitch = lerp(this.glitch, 0, sf(dt, 0.15));
+  }
+}
+
+// ---------- CHOREOGRAFIE: uitbraak en gebaren ----------
+class Choreographer {
+  constructor() { this.e = 0; this.v = 0; this.target = 0; this.k = 40; this.zeta = 0.6; this.holdUntil = 0; this.cd = 6;
+    this.dir = [0, 0]; this.dirS = [0, 0]; this.kind = null; this.t = 0; this.gesture = null; this.gcd = 0; this.lastGesture = ""; this.lean = 0; }
+  _start(kind, target, hold, lateral, k, zeta) {
+    const ang = Math.random() * 2 * Math.PI; this.dir = [Math.cos(ang) * lateral, Math.sin(ang) * lateral * 0.8];
+    this.kind = kind; this.target = target; this.k = k; this.zeta = zeta; this.holdUntil = this.t + hold;
+  }
+  force() { this._start("groot", 1.0, 2.5, 0.2 + Math.random() * 0.22, 55, 0.5); }
+  update(dt, state, a, beatNow) {
+    this.t += dt; this.cd -= dt; this.gcd -= dt;
+    const rate = T.breakout_rate, R = Math.random;
+    if (T.breakout && this.kind === null && this.cd <= 0) {
+      if (state === EUPHORIA && beatNow) {
+        let p = (0.035 + 0.07 * a.intensity) * rate; if (a.glitchEvent) p = 0.75;
+        if (R() < p) {
+          if (R() < 0.65) this._start("groot", 0.85 + R() * 0.2, a.period * (2 + Math.floor(R() * 5)), 0.2 + R() * 0.22, 55, 0.5);
+          else this._start("piep", 0.4 + R() * 0.2, a.period * (1 + Math.floor(R() * 3)), 0.38 + R() * 0.17, 70, 0.55);
+        }
+      } else if (state === ZEN && R() < 0.0001 * rate * dt * 60) this._start("zweef", 0.4 + R() * 0.2, 4 + R() * 4, R() * 0.2, 6, 0.95);
+    }
+    if (this.kind && (this.t > this.holdUntil || !MUSIC(state))) { this.kind = null; this.target = 0; this.k = 14; this.zeta = 0.8; this.cd = (8 + R() * 14) / Math.max(0.2, rate); }
+    let leanT = 0; if (VOICE(state)) leanT = 0.32 + 0.12 * a.voiceEnv + (a.inUtt ? 0.08 : 0);
+    this.lean += (leanT - this.lean) * sf(dt, 0.9);
+    const goal = Math.max(this.target, this.lean);
+    if (this.kind === null && this.target === 0 && this.lean > 0.01) { this.k = 10; this.zeta = 0.9; }
+    const acc = this.k * (goal - this.e) - 2 * this.zeta * Math.sqrt(this.k) * this.v;
+    this.v += acc * dt; this.e = clamp(this.e + this.v * dt, -0.1, 1.25);
+    const dg = this.kind ? this.dir : [0, 0], f = sf(dt, 0.5);
+    this.dirS = [lerp(this.dirS[0], dg[0], f), lerp(this.dirS[1], dg[1], f)];
+    const miniBusy = this.gesture && this.gesture[0] === "mini-knik";
+    if (T.gestures && VOICE(state) && (this.gcd <= 0 || (a.turnEnd && miniBusy))) {
+      if (a.turnEnd && a.turnEnd.duration > 0.6) {
+        const te = a.turnEnd, r = R(); let kind;
+        if (te.rise > 1.06) kind = r < 0.75 ? "kantel" : "knik";
+        else if (te.loud > 5) kind = r < 0.6 ? "schud" : "knik";
+        else kind = r < 0.7 ? "knik" : (r < 0.88 ? "schud" : "kantel");
+        if (kind === "schud" && this.lastGesture === "schud") kind = "knik";
+        const amp = { knik: 0.32, schud: 0.38, kantel: 0.34 }[kind] * (0.8 + R() * 0.35);
+        this.gesture = [kind, this.t, { knik: 1.3, schud: 1.2, kantel: 1.7 }[kind], amp]; this.gcd = 1.2; this.lastGesture = kind;
+      } else if (a.backchannel && R() < 0.7) { this.gesture = ["mini-knik", this.t, 0.6, 0.12]; this.gcd = 1.8; this.lastGesture = "mini-knik"; }
+    }
+  }
+  pose() {     // [matrix, hue-verschuiving, helderheid, extra leunen]
+    if (!this.gesture) return [M3.id(), 0, 1, 0];
+    const [kind, t0, dur, amp] = this.gesture, tau = this.t - t0;
+    if (tau > dur) { this.gesture = null; return [M3.id(), 0, 1, 0]; }
+    const env = Math.pow(Math.sin(Math.PI * clamp(tau / dur)), 0.7);
+    if (kind === "knik" || kind === "mini-knik") return [M3.rx(amp * Math.sin(2 * Math.PI * 2.2 * tau) * Math.exp(-tau * 1.4)), 0, 1 + 0.18 * env, 0.04 * env];
+    if (kind === "schud") return [M3.ry(amp * Math.sin(2 * Math.PI * 3 * tau) * Math.exp(-tau * 1.6)), -38 * env, 1 - 0.15 * env, -0.05 * env];
+    return [M3.rz(amp * env), 12 * env, 1 + 0.12 * env, 0.1 * env];
+  }
+}
+
+// ---------- HOOFDVOLGING (MediaPipe, frontcamera) ----------
+class HeadTracker {
+  constructor() { this.ok = false; this.status = "uit"; this.hx = 0; this.hy = 0; this.conf = 0; this.lastSeen = -1e9; this.next = 0; }
+  async init(stream) {
+    try {
+      this.video = document.createElement("video"); this.video.muted = true; this.video.playsInline = true;
+      this.video.srcObject = stream; await this.video.play();
+      this.status = "model laden";
+      const v = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs");
+      const fs = await v.FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+      this.det = await v.FaceDetector.createFromOptions(fs, { baseOptions: {
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
+        delegate: "GPU" }, runningMode: "VIDEO", minDetectionConfidence: 0.5 });
+      this.ok = true; this.status = "zoekt gezicht";
+    } catch (e) { console.warn("hoofdvolging niet beschikbaar:", e); this.status = "niet beschikbaar"; }
+  }
+  update(dt, now) {
+    if (this.ok && now >= this.next && this.video.readyState >= 2) {
+      this.next = now + 66;      // ~15 x per seconde
+      try {
+        const r = this.det.detectForVideo(this.video, now);
+        if (r.detections && r.detections.length) {
+          const b = r.detections.reduce((m, d) => d.boundingBox.width * d.boundingBox.height > m.boundingBox.width * m.boundingBox.height ? d : m).boundingBox;
+          const cx = (b.originX + b.width / 2) / this.video.videoWidth, cy = (b.originY + b.height / 2) / this.video.videoHeight;
+          let hx = -(cx - 0.5) * 2; if (T.webcam_mirror) hx = -hx;
+          this.hx = lerp(this.hx, hx, 0.5); this.hy = lerp(this.hy, (cy - 0.5) * 2, 0.5);
+          this.lastSeen = now; this.status = "volgt";
+        } else if (now - this.lastSeen > 1000) this.status = "zoekt gezicht";
+      } catch (e) {}
+    }
+    const seen = now - this.lastSeen < 1000;
+    this.conf += ((seen ? 1 : 0) - this.conf) * sf(dt, seen ? 0.4 : 1.5);
+  }
+}
+
+// =====================================================================
+//  WEBGL-RENDERER
+// =====================================================================
+const canvas = document.getElementById("gl");
+const gl = canvas.getContext("webgl2", { antialias: false, alpha: false, premultipliedAlpha: false, preserveDrawingBuffer: false });
+if (!gl) document.getElementById("msg").textContent = "WebGL2 wordt door deze browser niet ondersteund.";
+
+function sh(type, src) { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; }
+function prog(vs, fs) { const p = gl.createProgram(); gl.attachShader(p, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p)); const u = {}; const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) { const nm = gl.getActiveUniform(p, i).name; u[nm] = gl.getUniformLocation(p, nm); } return { p, u }; }
+
+const P_GEO = prog(`#version 300 es
+in vec2 a_pos; in vec4 a_col; in float a_size; uniform vec2 u_res; out vec4 v_col;
+void main(){ vec2 c = a_pos / u_res * 2.0 - 1.0; gl_Position = vec4(c.x, -c.y, 0.0, 1.0); gl_PointSize = a_size; v_col = a_col; }`,
+`#version 300 es
+precision mediump float; in vec4 v_col; uniform int u_points; out vec4 o;
+void main(){ float a = 1.0; if (u_points == 1) { vec2 d = gl_PointCoord * 2.0 - 1.0; float r2 = dot(d, d); a = exp(-r2 * 4.5) * (1.0 - smoothstep(0.6, 1.0, r2)); }
+  o = vec4(v_col.rgb * v_col.a * a, v_col.a * a); }`);
+
+const P_QUAD = prog(`#version 300 es
+const vec2 P[3] = vec2[3](vec2(-1.,-1.), vec2(3.,-1.), vec2(-1.,3.)); out vec2 v_uv;
+void main(){ gl_Position = vec4(P[gl_VertexID], 0., 1.); v_uv = P[gl_VertexID] * 0.5 + 0.5; }`,
+`#version 300 es
+precision highp float; in vec2 v_uv; uniform int u_mode; uniform vec2 u_res; uniform vec4 u_col; uniform vec2 u_c; uniform vec2 u_r;
+uniform vec4 u_rect; uniform float u_corner; uniform sampler2D u_tex; uniform vec2 u_off; uniform float u_k; out vec4 o;
+void main(){
+  vec2 p = vec2(gl_FragCoord.x, u_res.y - gl_FragCoord.y);
+  if (u_mode == 0) { o = u_col; }                                                   // vlak (uitdoven)
+  else if (u_mode == 1) {                                                            // halo / fotonring
+    float d = length(p - u_c) / u_r.x; float ring = exp(-pow((d - 1.0) / 0.06, 2.0)) * 0.75;
+    float glow = exp(-max(d - 1.0, 0.0) * 4.0) * 0.16; float edge = clamp(1.0 - pow(d / 2.2, 4.0), 0.0, 1.0);
+    float g = (d < 1.0 ? ring * 0.5 : ring + glow) * edge; o = vec4(u_col.rgb * g, g); }
+  else if (u_mode == 2) { float d = length(p - u_c); float a = 1.0 - smoothstep(u_r.x - 1.5, u_r.x, d); o = vec4(0., 0., 0., a); }   // zwart gat
+  else if (u_mode == 3) {                                                            // kader: zwart buiten afgerond venster
+    vec2 c = (u_rect.xy + u_rect.zw) * 0.5, h = (u_rect.zw - u_rect.xy) * 0.5;
+    vec2 q = abs(p - c) - h + u_corner; float sd = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - u_corner;
+    o = vec4(0., 0., 0., smoothstep(-1.0, 1.0, sd)); }
+  else if (u_mode == 4) {                                                            // zachte lichtvlek (ellips)
+    vec2 d = (p - u_c) / u_r; float r = length(d); float g = exp(-r * r / (2.0 * 0.33 * 0.33)) * pow(clamp(1.0 - r, 0.0, 1.0), 2.0);
+    o = vec4(u_col.rgb * g, g); }
+  else if (u_mode == 5) { vec2 uv = (p + u_off) / u_res; uv.y = 1.0 - uv.y; o = vec4(texture(u_tex, uv).rgb * u_col.rgb * u_k, 1.0); }  // textuur
+}`);
+
+const P_BLUR = prog(`#version 300 es
+const vec2 P[3] = vec2[3](vec2(-1.,-1.), vec2(3.,-1.), vec2(-1.,3.)); out vec2 v_uv;
+void main(){ gl_Position = vec4(P[gl_VertexID], 0., 1.); v_uv = P[gl_VertexID] * 0.5 + 0.5; }`,
+`#version 300 es
+precision mediump float; in vec2 v_uv; uniform sampler2D u_tex; uniform vec2 u_dir; out vec4 o;
+void main(){ vec3 s = texture(u_tex, v_uv).rgb * 0.2270;
+  s += (texture(u_tex, v_uv + u_dir * 1.3846).rgb + texture(u_tex, v_uv - u_dir * 1.3846).rgb) * 0.3162;
+  s += (texture(u_tex, v_uv + u_dir * 3.2308).rgb + texture(u_tex, v_uv - u_dir * 3.2308).rgb) * 0.0703;
+  o = vec4(s, 1.0); }`);
+
+const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+const bufPos = gl.createBuffer(), bufCol = gl.createBuffer(), bufSize = gl.createBuffer();
+const MAXV = 40000;
+const G = { pos: new Float32Array(MAXV * 2), col: new Float32Array(MAXV * 4), size: new Float32Array(MAXV), n: 0 };
+function attrib(name, buf, n) { const loc = gl.getAttribLocation(P_GEO.p, name); gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, n, gl.FLOAT, false, 0, 0); }
+attrib("a_pos", bufPos, 2); attrib("a_col", bufCol, 4); attrib("a_size", bufSize, 1);
+const emptyVao = gl.createVertexArray();
+
+class Batch {        // verzamelt lijnen of punten voor één tekenopdracht
+  constructor(points) { this.points = points; this.pos = []; this.col = []; this.size = []; }
+  clear() { this.pos.length = 0; this.col.length = 0; this.size.length = 0; }
+  line(x1, y1, x2, y2, r, g, b, a = 1) { this.pos.push(x1, y1, x2, y2); this.col.push(r, g, b, a, r, g, b, a); this.size.push(1, 1); }
+  point(x, y, s, r, g, b, a = 1) { this.pos.push(x, y); this.col.push(r, g, b, a); this.size.push(s); }
+  draw(res) {
+    const n = this.size.length; if (!n) return;
+    const m = Math.min(n, MAXV);
+    G.pos.set(this.pos.length > m * 2 ? this.pos.slice(0, m * 2) : this.pos); G.col.set(this.col.length > m * 4 ? this.col.slice(0, m * 4) : this.col); G.size.set(this.size.length > m ? this.size.slice(0, m) : this.size);
+    gl.useProgram(P_GEO.p); gl.bindVertexArray(vao);
+    gl.uniform2f(P_GEO.u.u_res, res[0], res[1]); gl.uniform1i(P_GEO.u.u_points, this.points ? 1 : 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufPos); gl.bufferData(gl.ARRAY_BUFFER, G.pos.subarray(0, m * 2), gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufCol); gl.bufferData(gl.ARRAY_BUFFER, G.col.subarray(0, m * 4), gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufSize); gl.bufferData(gl.ARRAY_BUFFER, G.size.subarray(0, m), gl.DYNAMIC_DRAW);
+    gl.drawArrays(this.points ? gl.POINTS : gl.LINES, 0, m);
+  }
+}
+const ADD = () => { gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE); };
+const NORMAL = () => { gl.enable(gl.BLEND); gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA); };
+const NOBLEND = () => gl.disable(gl.BLEND);
+function quad(mode, res, opt = {}) {
+  gl.useProgram(P_QUAD.p); gl.bindVertexArray(emptyVao); const u = P_QUAD.u;
+  gl.uniform1i(u.u_mode, mode); gl.uniform2f(u.u_res, res[0], res[1]);
+  const c = opt.col || [0, 0, 0, 1]; gl.uniform4f(u.u_col, c[0], c[1], c[2], c[3] ?? 1);
+  gl.uniform2f(u.u_c, ...(opt.c || [0, 0])); gl.uniform2f(u.u_r, ...(opt.r || [1, 1]));
+  gl.uniform4f(u.u_rect, ...(opt.rect || [0, 0, 0, 0])); gl.uniform1f(u.u_corner, opt.corner || 0);
+  gl.uniform2f(u.u_off, ...(opt.off || [0, 0])); gl.uniform1f(u.u_k, opt.k ?? 1);
+  if (opt.tex) { gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, opt.tex); gl.uniform1i(u.u_tex, 0); }
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+function makeFbo(w, h) {
+  const tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  const fb = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  gl.clearColor(0.012, 0.008, 0.027, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+  return { fb, tex, w, h };
+}
+function bindFbo(f) { gl.bindFramebuffer(gl.FRAMEBUFFER, f ? f.fb : null); const w = f ? f.w : canvas.width, h = f ? f.h : canvas.height; gl.viewport(0, 0, w, h); return [w, h]; }
+
+// ---------- SCÈNE ----------
+const Z_WIN = 430, Z_BACK = 1700;
+class Scene {
+  constructor() {
+    this.LAT = 26; this.LON = 42; this.BASE = 100;
+    this.nd = 170; this.dx = new Float32Array(this.nd); this.dy = new Float32Array(this.nd); this.dz = new Float32Array(this.nd);
+    const no = 900; this.no = no; this.oa = new Float32Array(no); this.od = new Float32Array(no); this.oy = new Float32Array(no); this.os = new Float32Array(no);
+    for (let i = 0; i < no; i++) { this.oa[i] = Math.random() * 2 * Math.PI; this.od[i] = this.BASE + 20 + Math.random() ** 2 * 600; this.oy[i] = -8 + 16 * Math.random(); this.os[i] = (400 / this.od[i]) * (0.01 + 0.03 * Math.random()); }
+    this.nj = 120; this.jx = new Float32Array(this.nj); this.jy = new Float32Array(this.nj); this.jz = new Float32Array(this.nj);
+    this.jdir = new Float32Array(this.nj); this.jsp = new Float32Array(this.nj); this.jl = new Float32Array(this.nj);
+    for (let i = 0; i < this.nj; i++) this.resetJet(i, 0);
+    this.L1 = []; this.L2 = [];
+    for (let i = 0; i < this.LAT; i++) for (let j = 0; j < this.LON; j++) {
+      const cur = i * this.LON + j;
+      if (i < this.LAT - 1) { this.L1.push(cur); this.L2.push((i + 1) * this.LON + j); }
+      this.L1.push(cur); this.L2.push(i * this.LON + (j + 1) % this.LON);
+    }
+    const NV = this.LAT * this.LON; this.mx = new Float32Array(NV); this.my = new Float32Array(NV); this.mz = new Float32Array(NV); this.mok = new Uint8Array(NV);
+    this.size = null; this.hq = true; this.frameOn = T.window_frame; this.eye = [0, 0];
+    this.lines = { b0: new Batch(false), b1: new Batch(false), f0: new Batch(false), f1: new Batch(false), box: new Batch(false), rim: new Batch(false), streakIn: new Batch(false), streakOut: new Batch(false) };
+    this.pts = { b0: new Batch(true), b1: new Batch(true), f0: new Batch(true), f1: new Batch(true), room: new Batch(true) };
+  }
+  resetJet(i, startY) {
+    this.jx[i] = -10 + 20 * Math.random(); this.jz[i] = -10 + 20 * Math.random(); this.jdir[i] = Math.random() > 0.5 ? 1 : -1;
+    this.jsp[i] = 15 + 25 * Math.random(); this.jl[i] = 0.5 + 0.5 * Math.random(); this.jy[i] = startY * this.jdir[i];
+  }
+  burst(n) {
+    if (n <= 0) return; const idx = Array.from({ length: this.nj }, (_, i) => i).sort((a, b) => this.jl[a] - this.jl[b]).slice(0, n);
+    for (const i of idx) { this.resetJet(i, this.BASE * 0.5); this.jsp[i] = 55 + 40 * Math.random(); this.jl[i] = 1; }
+  }
+  spawnDust(i, initial) {
+    const [w, h] = this.size, F0 = this.F0;
+    const Xw = (w / 2) * Z_WIN / F0 * 1.15, Yw = (h / 2) * Z_WIN / F0 * 1.15, k = (Z_BACK / Z_WIN) * 0.55;
+    this.dx[i] = (Math.random() * 2 - 1) * Xw * k; this.dy[i] = (Math.random() * 2 - 1) * Yw * k;
+    this.dz[i] = initial ? Z_WIN + Math.random() * (Z_BACK - Z_WIN) : Z_BACK * (0.8 + 0.2 * Math.random());
+  }
+  resize(w, h) {
+    this.size = [w, h]; this.F0 = 450 * h / 720; this.u = h / 720;
+    this.back = makeFbo(w, h); this.comp = makeFbo(w, h);
+    const bw = Math.max(1, Math.floor(w / 4)), bh = Math.max(1, Math.floor(h / 4)); this.bl1 = makeFbo(bw, bh); this.bl2 = makeFbo(bw, bh);
+    for (let i = 0; i < this.nd; i++) this.spawnDust(i, true);
+    this.buildBox();
+  }
+  winWorld() { const [w, h] = this.size, m = this.frameOn ? T.frame_margin * w : 0; return [(w / 2 - m) * Z_WIN / this.F0, (h / 2 - m) * Z_WIN / this.F0, m]; }
+  buildBox() {
+    const [Xw, Yw] = this.winWorld(), segs = [];
+    const line = (p, q, n = 4) => { for (let i = 0; i < n; i++) { const a = i / n, b = (i + 1) / n; segs.push([p.map((v, k) => lerp(v, q[k], a)), p.map((v, k) => lerp(v, q[k], b))]); } };
+    const xs = [...Array(9)].map((_, i) => -Xw + 2 * Xw * i / 8), ys = [...Array(7)].map((_, i) => -Yw + 2 * Yw * i / 6), zs = [...Array(6)].map((_, i) => Z_WIN + (Z_BACK - Z_WIN) * i / 5);
+    for (const X of xs) { line([X, Yw, Z_WIN], [X, Yw, Z_BACK]); line([X, -Yw, Z_WIN], [X, -Yw, Z_BACK]); }
+    for (const Y of ys) { line([-Xw, Y, Z_WIN], [-Xw, Y, Z_BACK]); line([Xw, Y, Z_WIN], [Xw, Y, Z_BACK]); }
+    for (const Z of zs.slice(1)) { line([-Xw, Yw, Z], [Xw, Yw, Z], 6); line([-Xw, -Yw, Z], [Xw, -Yw, Z], 6); line([-Xw, -Yw, Z], [-Xw, Yw, Z], 4); line([Xw, -Yw, Z], [Xw, Yw, Z], 4); }
+    for (const X of xs.slice(1, -1)) line([X, -Yw, Z_BACK], [X, Yw, Z_BACK], 4);
+    for (const Y of ys.slice(1, -1)) line([-Xw, Y, Z_BACK], [Xw, Y, Z_BACK], 6);
+    this.box = segs;
+    const rim = [], corners = [[-Xw, -Yw], [Xw, -Yw], [Xw, Yw], [-Xw, Yw]];
+    for (let e = 0; e < 4; e++) { const p = corners[e], q = corners[(e + 1) % 4]; for (let i = 0; i < 12; i++) { const a = i / 12, b = (i + 1) / 12; rim.push([[lerp(p[0], q[0], a), lerp(p[1], q[1], a), Z_WIN], [lerp(p[0], q[0], b), lerp(p[1], q[1], b), Z_WIN]]); } }
+    this.rim = rim;
+  }
+  toggleFrame() { this.frameOn = !this.frameOn; if (this.size) this.buildBox(); }
+  proj(X, Y, Z) {           // off-axis: glasvlak staat vast, de rest beweegt met je hoofd
+    const [ex, ey] = this.eye, [w, h] = this.size, Zs = Math.max(Z, 1), F0 = this.F0;
+    return [w / 2 + F0 * (ex / Z_WIN + (X - ex) / Zs), h / 2 + F0 * (ey / Z_WIN + (Y - ey) / Zs), F0 / Zs];
+  }
+
+  render(V) {
+    const [w, h] = this.size, P = V.P, step = V.step, S = V.S, M = V.M, Zc = V.CORE_Z, Xc = V.Xc, Yc = V.Yc, k = V.FOV / this.F0, u = this.u;
+    const bass = V.bass, mid = V.mid, high = V.high, hue = V.hue, spread = P.spread, sat = P.sat, glitch = V.glitch, tc = V.time, B = V.beat, Hh = V.hat;
+    const bright = P.bright * (1 + 0.25 * B) * V.brightMul;
+    const light = clamp((0.35 + bass * 0.5 + B * 0.6 + V.pulse * 0.01) * bright, 0, 2);
+    this.eye = V.eye;
+    const L = this.lines, Pt = this.pts; for (const b of Object.values(L)) b.clear(); for (const b of Object.values(Pt)) b.clear();
+    const col = new Float32Array(3);
+    const dot = (Z, x, y, s, r, g, b) => {        // punt in juiste laag zetten
+      const key = (Z > Z_WIN ? "b" : "f") + (Z > Zc ? "0" : "1");
+      const sz = Math.min(48, (1.0 + s * 1.0) * u), a = s > 4 ? Math.min(1, 4 / s) ** 1.4 : 1;
+      Pt[key].point(x, y, sz, r, g, b, a);
+    };
+
+    // 0. bak
+    for (const [a, b] of this.box) {
+      const mx = (a[0] + b[0]) / 2 - Xc, my = (a[1] + b[1]) / 2 - Yc, mz = (a[2] + b[2]) / 2 - Zc;
+      const lit = 1 / (1 + (mx * mx + my * my + mz * mz) / (420 * 420));
+      hsv(hue, 45 * sat, 5 + 55 * lit * light, col, 0);
+      const p1 = this.proj(...a), p2 = this.proj(...b); L.box.line(p1[0], p1[1], p2[0], p2[1], col[0], col[1], col[2]);
+    }
+    // 1. stof
+    const speed = (3 + bass * 40 + B * 45) * P.dust * step;
+    for (let i = 0; i < this.nd; i++) {
+      this.dz[i] -= speed; if (this.dz[i] < 70) this.spawnDust(i, false);
+      const [px, py, sc] = this.proj(this.dx[i], this.dy[i], this.dz[i]);
+      if (px < -20 || px > w + 20 || py < -20 || py > h + 20) continue;
+      const fadeNear = clamp((this.dz[i] - 70) / 160);
+      hsv(hue + 180, high * 80 * sat, Math.min(100, sc / u * 40 + bass * 60) * Math.min(1, bright) * fadeNear, col, 0);
+      const inside = this.dz[i] > Z_WIN;
+      if (speed > 9) { const q = this.proj(this.dx[i], this.dy[i], this.dz[i] + speed * 2.5); (inside ? L.streakIn : L.streakOut).line(q[0], q[1], px, py, col[0], col[1], col[2]); }
+      else if (inside) dot(this.dz[i], px, py, Math.max(1, sc / u * 1.6), col[0], col[1], col[2]);
+      else Pt.room.point(px, py, Math.min(48, (1.0 + Math.max(1, sc / u * 1.6)) * u), col[0], col[1], col[2], Math.min(1, 4 / Math.max(4, sc / u * 1.6)) ** 1.4);
+    }
+    // 2. accretieschijf
+    for (let i = 0; i < this.no; i++) {
+      this.oa[i] += (this.os[i] * P.spin + bass * 0.06) * step;
+      const ang = this.oa[i], oy = this.oy[i] + Math.sin(ang * 3 + tc) * (mid * 120);
+      const lx = Math.cos(ang) * this.od[i] * S, ly = oy * S, lz = Math.sin(ang) * this.od[i] * S;
+      const rx = M[0] * lx + M[1] * ly + M[2] * lz, ry = M[3] * lx + M[4] * ly + M[5] * lz, rz = M[6] * lx + M[7] * ly + M[8] * lz;
+      const tz = M[6] * -Math.sin(ang) + M[8] * Math.cos(ang);
+      const Z = rz + Zc; if (Z <= 20) continue;
+      const [px, py, sc] = this.proj(Xc + rx * k, Yc + ry * k, Z);
+      const inten = clamp(1 - ((this.od[i] * S - V.horizon) / (500 * S)));
+      let beam = clamp(1 - 0.6 * tz, 0.35, 1.6); if (Hh > 0.05 && Math.random() < 0.25) beam *= 1 + Hh * 1.4;
+      hsv(hue - inten * 100 * spread - tz * 8, (100 - inten * 50) * sat * (1 - P.whitehot * bass * 0.5 * inten), inten * 100 * bright * beam, col, 0);
+      dot(Z, px, py, Math.max(1, sc / u * k * 2.5 * inten + bass), col[0], col[1], col[2]);
+    }
+    // 3. jets
+    const jet = P.jet, jvis = Math.min(1, jet);
+    for (let i = 0; i < this.nj; i++) {
+      this.jy[i] += (this.jsp[i] * (0.4 + 0.6 * Math.min(jet, 1.5)) + high * 60 * jet) * this.jdir[i] * step;
+      this.jl[i] -= 0.02 * step; const grow = Math.pow(1.06, step); this.jx[i] *= grow; this.jz[i] *= grow;
+      if (this.jl[i] <= 0 || Math.abs(this.jy[i]) > 1000) this.resetJet(i, V.horizon * 0.5);
+      const val = this.jl[i] * 100 * jvis * bright; if (val < 3) continue;
+      const lx = this.jx[i] * S, ly = this.jy[i] * S, lz = this.jz[i] * S;
+      const rx = M[0] * lx + M[1] * ly + M[2] * lz, ry = M[3] * lx + M[4] * ly + M[5] * lz, Z = M[6] * lx + M[7] * ly + M[8] * lz + Zc;
+      if (Z <= 40) continue;
+      const [px, py, sc] = this.proj(Xc + rx * k, Yc + ry * k, Z), near = clamp((Z - 40) / 120);
+      hsv(hue + 60 * spread, 20, val * 0.8 * near, col, 0);
+      dot(Z, px, py, Math.max(1, sc / u * k * 3 * this.jl[i] * (0.6 + 0.4 * jvis)), col[0], col[1], col[2]);
+    }
+    // 4. mesh
+    const mg = 1.1 * Math.tanh(mid / 1.1), hg = Math.tanh(high), fu = 2 + mg * 2, fv = 3 + mg * 2;
+    const shift = new Float32Array(this.LAT);
+    if (glitch > 0.02) for (let i = 0; i < this.LAT; i++) if (Math.random() < glitch * 0.5) shift[i] = (Math.random() * 2 - 1) * glitch * 40 * u;
+    for (let i = 0; i < this.LAT; i++) {
+      const U = Math.PI * i / (this.LAT - 1), sU = Math.sin(U), cU = Math.cos(U);
+      for (let j = 0; j < this.LON; j++) {
+        const Vv = 2 * Math.PI * j / this.LON;
+        const fluid = Math.sin(U * fu + tc * 2.5) * Math.cos(Vv * fv - tc * 1.5) * (70 * mg);
+        const bub = Math.sin(Vv * 4 + tc * 3) * Math.cos(U * 4 - tc * 3) * (80 * hg * P.spikes + 45 * Hh);
+        const r = V.base_r + (fluid + bub + Math.sin(U * 2 - tc * 1.5) * 8) * S;
+        const lx = r * sU * Math.cos(Vv), ly = r * sU * Math.sin(Vv), lz = r * cU;
+        const rx = M[0] * lx + M[1] * ly + M[2] * lz, ry = M[3] * lx + M[4] * ly + M[5] * lz, Z = M[6] * lx + M[7] * ly + M[8] * lz + Zc;
+        const idx = i * this.LON + j;
+        this.mok[idx] = Z > 20 ? 1 : 0; this.mz[idx] = Z;
+        if (Z > 20) { const [px, py] = this.proj(Xc + rx * k, Yc + ry * k, Z); this.mx[idx] = px + shift[i]; this.my[idx] = py; }
+      }
+    }
+    const lineSat = (100 - high * 40) * sat * (1 - P.whitehot * bass * 0.6);
+    const order = [];
+    for (let e = 0; e < this.L1.length; e++) { const a = this.L1[e], b = this.L2[e]; if (this.mok[a] && this.mok[b]) order.push(e); }
+    for (const e of order) {
+      const a = this.L1[e], b = this.L2[e], zavg = (this.mz[a] + this.mz[b]) / 2;
+      if (glitch > 0.02 && Math.random() < glitch * 0.3) continue;
+      const depth = clamp(0.55 - (zavg - Zc) / (2.2 * Math.max(60, V.base_r)), 0.05, 1);
+      let lh = hue + ((this.mx[a] / w - 0.5) * 60 + high * 30) * spread, lv = depth * 68 * bright + bass * 22;
+      if (glitch > 0.02 && Math.random() < glitch * 0.85) { lh += 180; lv += 50; }
+      hsv(lh, lineSat, lv, col, 0);
+      const key = (zavg > Z_WIN ? "b" : "f") + (zavg > Zc ? "0" : "1");
+      L[key].line(this.mx[a], this.my[a], this.mx[b], this.my[b], col[0], col[1], col[2]);
+      if (depth > 0.7) dot(zavg - 1, this.mx[a], this.my[a], Math.max(1, depth * 2 + bass * 3) * Math.min(2, k), col[0] * 0.8, col[1] * 0.8, col[2] * 0.8);
+    }
+    // 5. zwart gat
+    const [hx, hy, hsc] = this.proj(Xc, Yc, Zc), bhR = Math.max(2, V.horizon * k * hsc);
+    let ht = hsv1(hue, 45 * sat, clamp((45 + bass * 45 + V.pulse) * bright, 0, 100)); if (glitch > 0.3) ht = hsv1(hue + 180, 70, 100);
+    const res = [w, h];
+    const hole = () => { ADD(); quad(1, res, { c: [hx, hy], r: [bhR, bhR], col: [...ht, 1] }); NORMAL(); quad(2, res, { c: [hx, hy], r: [bhR * 0.97, 0] }); };
+    const draw = (key) => { NORMAL(); L[key].draw(res); ADD(); Pt[key].draw(res); };
+
+    // --- achter het glas (met sporen) ---
+    const fadeA = clamp(lerp(50, 20, high) * P.trail, 8, 90) / 255;
+    bindFbo(this.back); NORMAL(); quad(0, res, { col: [0.012, 0.008, 0.027, 1 - Math.pow(1 - fadeA, step)] });
+    NORMAL(); L.box.draw(res); ADD();
+    if (this.hq) {
+      const [, Yw] = this.winWorld(), tint = hsv1(hue, 60 * sat, clamp(22 * light, 0, 45));
+      for (const [sx, sy, sz, rw, rh] of [[Xc, Yw, Math.max(Zc, Z_WIN + 120), 700, 130], [Xc * 1.1, Yc * 1.1, Z_BACK, 1300, 1300]]) {
+        const [px, py, sc] = this.proj(sx, sy, sz); quad(4, res, { c: [px, py], r: [rw * sc / 2, rh * sc / 2], col: [...tint, 1] });
+      }
+    }
+    NORMAL(); L.streakIn.draw(res);
+    const holeBehind = Zc > Z_WIN;
+    draw("b0"); if (holeBehind) hole(); draw("b1");
+
+    // --- compositie ---
+    const target = this.hq ? this.comp : null;
+    bindFbo(target); NOBLEND(); quad(5, res, { tex: this.back.tex, col: [1, 1, 1, 1] });
+    if (this.hq && glitch > 0.25) { ADD(); quad(5, res, { tex: this.back.tex, col: [1, 0.16, 0.16, 1], off: [-glitch * 7 * u, 0] }); }
+    if (this.frameOn) {
+      const [, , m] = this.winWorld(); NORMAL(); quad(3, res, { rect: [m, m, w - m, h - m], corner: m * 0.35 });
+      if (this.hq) {
+        for (const [a, b] of this.rim) {
+          const mx = (a[0] + b[0]) / 2 - Xc, my = (a[1] + b[1]) / 2 - Yc, mz = (a[2] + b[2]) / 2 - Zc;
+          const rl = 1 / (1 + (mx * mx + my * my + mz * mz) / (330 * 330)) * light; hsv(hue, 35 * sat, 4 + 70 * rl, col, 0);
+          const p1 = this.proj(...a), p2 = this.proj(...b); L.rim.line(p1[0], p1[1], p2[0], p2[1], col[0], col[1], col[2]);
+        }
+        NORMAL(); L.rim.draw(res);
+      }
+    }
+    draw("f0"); if (!holeBehind) hole(); draw("f1");
+    NORMAL(); L.streakOut.draw(res); ADD(); Pt.room.draw(res);
+
+    // --- bloom ---
+    if (this.hq) {
+      bindFbo(this.bl1); NOBLEND(); quad(5, [this.bl1.w, this.bl1.h], { tex: this.comp.tex, col: [1, 1, 1, 1] });
+      for (const [src, dst, dx, dy] of [[this.bl1, this.bl2, 1, 0], [this.bl2, this.bl1, 0, 1], [this.bl1, this.bl2, 2, 0], [this.bl2, this.bl1, 0, 2]]) {
+        bindFbo(dst); gl.useProgram(P_BLUR.p); gl.bindVertexArray(emptyVao); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, src.tex);
+        gl.uniform1i(P_BLUR.u.u_tex, 0); gl.uniform2f(P_BLUR.u.u_dir, dx / src.w, dy / src.h); gl.drawArrays(gl.TRIANGLES, 0, 3);
+      }
+      bindFbo(null); NOBLEND(); quad(5, res, { tex: this.comp.tex, col: [1, 1, 1, 1] });
+      const kb = clamp(55 + bass * 55 + V.pulse * 1.2 + B * 65, 0, 170) / 255 * 1.6;
+      ADD(); quad(5, res, { tex: this.bl1.tex, col: [1, 1, 1, 1], k: kb });
+    }
+  }
+}
+
+// =====================================================================
+//  AUDIO-INVOER EN HOOFDLUS
+// =====================================================================
+const $ = id => document.getElementById(id);
+let actx, analyserNode, timeBuf, an, vad, mood, scene, choreo, tracker, fileSource = null, micStream = null, running = false;
+const ui = { hud: false, parallax: true, autoQ: true, slow: 0, note: null };
+const W = { sb: 0, sm: 0, sh: 0, maxB: 1000, maxM: 1000, maxH: 1000, tc: 0, rot: 0, drift: 0, breath: 0, huePh: 0, mirror: 1, beatEnv: 0, hatEnv: 0, eyeX: 0, eyeY: 0, fps: 60 };
+
+function note(text, sec = 4) { const n = $("note"); n.textContent = text; n.style.opacity = 1; clearTimeout(ui.note); ui.note = setTimeout(() => n.style.opacity = 0, sec * 1000); }
+
+const WORKLET = `class Cap extends AudioWorkletProcessor { constructor(){ super(); this.b = new Float32Array(1536); this.n = 0; }
+  process(inp){ const c = inp[0] && inp[0][0]; if (c) { for (let i = 0; i < c.length; i++) { this.b[this.n++] = c[i]; if (this.n === 1536) { this.port.postMessage(this.b.slice(0)); this.n = 0; } } } return true; } }
+  registerProcessor("cap", Cap);`;
+
+function ensureCtx() {          // binnen een tik aanroepen: browsers starten audio alleen na interactie
+  if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: "interactive" });
+  if (actx.state === "suspended") actx.resume().catch(() => {});
+}
+async function setupAudio(kind, file) {
+  ensureCtx();
+  await actx.resume().catch(() => {});
+  analyserNode = actx.createAnalyser(); analyserNode.fftSize = 2048; analyserNode.smoothingTimeConstant = 0;
+  timeBuf = new Float32Array(2048);
+  let src;
+  if (kind === "mic") {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }, video: false });
+    src = actx.createMediaStreamSource(micStream);
+  } else {
+    const buf = await actx.decodeAudioData(await file.arrayBuffer());
+    if (fileSource) try { fileSource.stop(); } catch (e) {}
+    src = fileSource = actx.createBufferSource(); fileSource.buffer = buf; fileSource.loop = true;
+    fileSource.connect(actx.destination); fileSource.start();
+  }
+  src.connect(analyserNode);
+  try {
+    const url = URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" }));
+    await actx.audioWorklet.addModule(url);
+    const node = new AudioWorkletNode(actx, "cap"); src.connect(node);
+    const sink = actx.createGain(); sink.gain.value = 0; node.connect(sink); sink.connect(actx.destination);
+    node.port.onmessage = ev => vad && vad.push(ev.data);
+  } catch (e) { console.warn("AudioWorklet niet beschikbaar", e); }
+  return kind;
+}
+
+async function start(kind, file) {
+  $("msg").textContent = "";
+  try {
+    if (kind === "mic" && !(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) throw new Error("geen microfoontoegang in deze omgeving");
+    await setupAudio(kind, file);
+  } catch (e) {
+    const framed = window.self !== window.top;
+    $("msg").textContent = kind === "mic"
+      ? (framed ? "In deze ingesloten weergave blokkeert de browser microfoon en camera zonder te vragen. Kies hieronder een muziekbestand, of open de webversie op je eigen adres voor microfoon en camera."
+                : "Microfoon niet beschikbaar (" + (e.message || e.name) + "). Controleer de sitetoestemmingen of kies een muziekbestand.")
+      : "Bestand kon niet worden afgespeeld.";
+    return;
+  }
+  $("start").style.display = "none";
+  try { await document.documentElement.requestFullscreen(); } catch (e) {}
+  try { if (navigator.wakeLock) await navigator.wakeLock.request("screen"); } catch (e) {}
+  if (!running) {
+    an = new Analyzer(actx.sampleRate); vad = new VoiceDetector(); mood = new Mood(); choreo = new Choreographer(); scene = new Scene();
+    an.startCalibration(T.calibration_seconds);
+    if (kind === "file") note("muziekbestand speelt — tik ⚙ voor instellingen", 5);
+    else note("kamer meten… even stil", 3.2);
+    running = true; resize(); last = performance.now(); requestAnimationFrame(frame);
+  }
+  if (kind === "mic") {
+    vad.init(actx.sampleRate).then(() => { if (vad.backend !== "silero") note("spraakherkenning: eenvoudige modus (Silero niet geladen)", 4); });
+    if ($("useCam").checked && !tracker) {
+      tracker = new HeadTracker();
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: 320, height: 240 }, audio: false })
+        .then(s => tracker.init(s)).catch(() => { tracker.status = "geen camera"; });
+    }
+  }
+}
+
+function resize() {
+  const scale = ui.renderScale || 1;
+  const w = Math.round(window.innerWidth * scale), h = Math.round(window.innerHeight * scale);
+  if (canvas.width !== w || canvas.height !== h || !scene.size) { canvas.width = w; canvas.height = h; scene.resize(w, h); }
+}
+window.addEventListener("resize", () => { if (running) resize(); });
+
+let last = 0;
+function frame(now) {
+  requestAnimationFrame(frame);
+  let dt = Math.min(0.1, Math.max(0.001, (now - last) / 1000)); last = now;
+  if (window.__FIXEDDT) dt = 1 / 60;
+  W.fps = lerp(W.fps, 1 / dt, 0.05);
+  const [w, h] = scene.size;
+  analyserNode.getFloatTimeDomainData(timeBuf);
+  const x = new Float64Array(2048); for (let i = 0; i < 2048; i++) x[i] = timeBuf[i] * 32768;
+  an.process(x, dt, vad);
+  if (an.calStatus) { if (an.calStatus !== "ok") note("kalibratie: " + an.calStatus, 5); an.calStatus = ""; }
+  mood.update(an, dt);
+  const P = mood.params;
+
+  const spec = an.spec, avg = ([a, b]) => { let s = 0; for (let i = a; i < b; i++) s += spec[i]; return s / (b - a); };
+  const rb = avg(an.VIS_B), rm = avg(an.VIS_M), rh = avg(an.VIS_H), dec = Math.pow(0.995, dt * 60);
+  W.maxB = Math.max(W.maxB * dec, rb + 0.1); W.maxM = Math.max(W.maxM * dec, rm + 0.1); W.maxH = Math.max(W.maxH * dec, rh + 0.1);
+  const gate = an.activity;
+  const bv = Math.pow(Math.min(1, rb / W.maxB), 1.5) * gate, mv = Math.pow(Math.min(1, rm / W.maxM), 1.5) * gate, hv = Math.pow(Math.min(1, rh / W.maxH), 1.5) * gate;
+  const f = dt * 60, snap = P.snap;
+  const ab = lerp(0.15, 0.55, snap), rbR = lerp(0.04, 0.14, snap), ah = lerp(0.25, 0.6, snap), rhR = lerp(0.08, 0.2, snap);
+  W.sb = lerp(W.sb, bv, 1 - Math.pow(1 - (bv > W.sb ? ab : rbR), f));
+  W.sm = lerp(W.sm, mv, 1 - Math.pow(1 - lerp(0.12, 0.35, snap), f));
+  W.sh = lerp(W.sh, hv, 1 - Math.pow(1 - (hv > W.sh ? ah : rhR), f));
+  const react = P.react, bass = Math.min(2, W.sb * react), mid = Math.min(2, W.sm * react), high = Math.min(2, W.sh * react);
+
+  let newBeat = 0;
+  if (an.beatEvent > 0) newBeat = an.beatEvent; else if (an.beatPredicted) newBeat = 0.7;
+  if (newBeat > W.beatEnv) W.beatEnv = newBeat;
+  W.beatEnv *= 1 - sf(dt, 0.11);
+  if (an.hatEvent > W.hatEnv) W.hatEnv = an.hatEvent;
+  W.hatEnv *= 1 - sf(dt, 0.06);
+  const B = W.beatEnv * P.beat, Hh = W.hatEnv * P.beat, groove = P.beat * an.tempoConf;
+  if (newBeat > 0 && P.beat > 0.2) scene.burst(Math.floor(28 * newBeat * P.beat));
+  choreo.update(dt, mood.state, an, newBeat > 0);
+  const [Rg, gHue, gBright, gLean] = choreo.pose();
+
+  let exT = 0, eyT = 0;
+  if (tracker) { tracker.update(dt, now); if (ui.parallax && tracker.ok) { exT = tracker.hx * 260 * T.parallax_strength * tracker.conf; eyT = tracker.hy * 170 * T.parallax_strength * tracker.conf; } }
+  W.eyeX = lerp(W.eyeX, exT, sf(dt, 0.12)); W.eyeY = lerp(W.eyeY, eyT, sf(dt, 0.12));
+
+  const step = dt * 60, baseRate = 0.015 + bass * 0.04;
+  W.tc += baseRate * P.tempo * step + B * 0.05 * step;
+  W.rot += baseRate * P.rot * step + B * 0.02 * step;
+  W.drift += 0.015 * (0.4 + 0.6 * P.tempo) * step;
+  W.breath += P.breath_speed * dt; W.huePh += 0.25 * dt;
+  const hue = mod(P.hue + Math.sin(W.huePh) * P.hue_wander + high * P.hue_wander * 0.8 + (an.centroid - 0.5) * 50 * P.melody + B * 22 + gHue, 360);
+
+  const mt = an.excess[1] > 5 ? lerp(0.45, 1.6, an.loudNorm) : W.mirror;
+  W.mirror = lerp(W.mirror, mt, sf(dt, 0.25));
+  const S = lerp(1, W.mirror, P.mirror);
+
+  const emerge = clamp(choreo.e + gLean, -0.1, 1.25), out = clamp(emerge);
+  const dX = Math.sin(W.drift * 0.15) * Math.cos(W.drift * 0.11) * (w * 0.25) * P.drift;
+  const dY = Math.cos(W.drift * 0.13) * Math.sin(W.drift * 0.09) * (h * 0.25) * P.drift;
+  const u = scene.u;
+  const cx = w / 2 + dX * (1 - 0.7 * out) + Math.sin(W.tc * 5) * bass * 5 * u + (Math.random() * 2 - 1) * B * 5 * u + choreo.dirS[0] * w * 0.5 * out;
+  const cy = h / 2 + dY * (1 - 0.7 * out) + Math.cos(W.tc * 6) * bass * 5 * u - B * 12 * u + choreo.dirS[1] * h * 0.5 * out;
+
+  const Morbit = rotation(15 * Math.PI / 180 + Math.sin(W.rot * 0.1) * 0.15, W.rot * 0.08,
+                          Math.sin(W.rot * 0.2) * 0.1 + bass * 0.05 + Math.sin(2 * Math.PI * an.beatPhase) * 0.07 * groove);
+  const focus = clamp(P.focus);
+  let M = Morbit;
+  if (focus > 0.001) {
+    let Meye = M3.mul(M3.rz(Math.sin(W.rot * 0.37) * 0.06), M3.mul(M3.rx(-Math.PI / 2 + 0.22 + Math.sin(W.rot * 0.23) * 0.06), M3.ry(W.rot * 0.25)));
+    const cz = 700 - 110 * P.approach;
+    Meye = M3.mul(rotFromTo([0, 0, -1], [W.eyeX - (cx - w / 2) * cz / scene.F0, W.eyeY - (cy - h / 2) * cz / scene.F0, -cz]), Meye);
+    M = quatToMat(slerp(matToQuat(Morbit), matToQuat(Meye), focus));
+  }
+  M = M3.mul(Rg, M);
+
+  const gb = 1.2 * Math.tanh(bass / 1.2);
+  const FOV = scene.F0 * (450 + gb * 140 - mid * 30 + B * 70) / 450;
+  const CORE_Z = lerp(700 - 110 * P.approach, 470, emerge);
+  const Xc = (cx - w / 2) * CORE_Z / scene.F0, Yc = (cy - h / 2) * CORE_Z / scene.F0;
+  const breath = Math.sin(W.breath) * P.breath_amp, pulse = an.voiceEnv * 28 * P.pulse;
+  const horizon = (scene.BASE + gb * 60 + breath * 0.4 + B * 14) * S;
+  const base_r = horizon + (P.gap + gb * 70 + pulse + breath * 0.6 + B * 48) * S;
+
+  if (!window.__NORENDER) scene.render({ P, step, S, M, FOV, CORE_Z, Xc, Yc, bass, mid, high, hue, horizon, base_r, pulse, glitch: mood.glitch, time: W.tc, beat: B, hat: Hh, eye: [W.eyeX, W.eyeY], brightMul: gBright });
+
+  if (ui.autoQ && scene.hq) { ui.slow = W.fps < 45 ? ui.slow + dt : 0; if (ui.slow > 4) { scene.hq = false; note("lichte modus aangezet (lage framerate)", 4); updatePanel(); } }
+  if (an.calibrating) $("note").style.opacity = 1;
+  if (ui.hud && (Math.floor(now / 100) % 2 === 0)) drawHud();
+}
+
+function drawHud() {
+  const L = mood.life, top = mood.weights.map((w, i) => [w, i]).sort((a, b) => b[0] - a[0]).filter(x => x[0] > 0.03).slice(0, 3)
+    .map(([w, i]) => LABELS[i][1].split(" /")[0] + " " + Math.round(w * 100) + "%").join("  ");
+  const tr = tracker ? `webcam ${tracker.status}  hoofd ${tracker.hx.toFixed(2)} ${tracker.hy.toFixed(2)}  zeker ${tracker.conf.toFixed(2)}` : "webcam uit";
+  $("hud").textContent =
+`STATE  ${LABELS[mood.state].join(" / ")}${mood.forced !== null ? "   [GEFORCEERD]" : ""}
+kandidaat ${LABELS[mood.cand][1]} (${mood.candTime.toFixed(1)}s)   in state ${mood.inState.toFixed(1)}s
+stemming energie ${mood.eff[0].toFixed(2)} warmte ${mood.eff[1].toFixed(2)}   mix: ${top}
+moeheid ${L.fatigue.toFixed(2)}  gewenning ${L.habituation.toFixed(2)}  schrik ${L.surprise.toFixed(2)}
+activiteit ${an.activityDb.toFixed(1)} dB (bas ${an.excess[0].toFixed(1)} stem ${an.excess[1].toFixed(1)} hoog ${an.excess[2].toFixed(1)})
+spraak ${an.voiceScore.toFixed(2)} [${vad.backend} ${vad.prob.toFixed(2)}]  intensiteit ${an.intensity.toFixed(2)}  beats/s ${an.onsetRate.toFixed(1)}
+tempo ${an.bpm.toFixed(0)} BPM  zekerheid ${an.tempoConf.toFixed(2)}  tel ${"#".repeat(1 + Math.floor(an.beatPhase * 4))}  klank ${an.centroid.toFixed(2)}
+uitbraak ${choreo.e.toFixed(2)} ${choreo.kind || "-"}  gebaar ${choreo.lastGesture || "-"}  toon ${an.pitch.toFixed(0)} Hz ${an.inUtt ? "praat" : ""}
+${tr}${ui.parallax ? "" : " (perspectief uit)"}
+${an.rate} Hz  ${W.fps.toFixed(0)} fps  ${scene.hq ? "hoge" : "lichte"} kwaliteit`;
+}
+
+// ---------- bediening ----------
+function updatePanel() {
+  document.querySelector('[data-act="quality"]').textContent = "Kwaliteit: " + (ui.autoQ ? "auto (" + (scene && scene.hq ? "hoog" : "licht") + ")" : (scene && scene.hq ? "hoog" : "licht"));
+}
+$("btnMic").onclick = () => { ensureCtx(); start("mic"); };
+$("btnFile").onclick = () => { ensureCtx(); $("fileIn").click(); };
+window.addEventListener("pointerdown", () => { if (actx && actx.state === "suspended") actx.resume().catch(() => {}); });
+$("fileIn").onchange = e => { const f = e.target.files[0]; if (f) start("file", f); };
+$("gear").onclick = () => { const p = $("panel"); p.style.display = p.style.display === "block" ? "none" : "block"; updatePanel(); };
+$("panel").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b || !running) { if (b && b.dataset.act === "file") $("fileIn").click(); return; }
+  const act = b.dataset.act;
+  if (act === "hud") { ui.hud = !ui.hud; $("hud").style.display = ui.hud ? "block" : "none"; }
+  else if (act === "frame") scene.toggleFrame();
+  else if (act === "quality") { if (ui.autoQ) { ui.autoQ = false; scene.hq = !scene.hq; } else if (scene.hq) scene.hq = false; else { ui.autoQ = true; scene.hq = true; ui.slow = 0; } updatePanel(); }
+  else if (act === "cal") { an.startCalibration(T.calibration_seconds); note("kamer meten… even stil", 3.2); }
+  else if (act === "break") choreo.force();
+  else if (act === "glitch") mood.forceGlitch = true;
+  else if (act === "parallax") { ui.parallax = !ui.parallax; note("webcam-perspectief " + (ui.parallax ? "aan" : "uit")); }
+  else if (act === "file") { ensureCtx(); $("fileIn").click(); }
+  else if (act === "full") { (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen()).catch(() => {}); }
+  else if (act === "state") { const s = parseInt(b.dataset.s, 10); mood.forced = s < 0 ? null : s; }
+});
+window.addEventListener("keydown", e => {
+  if (!running) return; const k = e.key.toLowerCase();
+  if (k === "d") { ui.hud = !ui.hud; $("hud").style.display = ui.hud ? "block" : "none"; }
+  else if (k === "f") scene.toggleFrame();
+  else if (k === "q") { scene.hq = !scene.hq; ui.autoQ = false; }
+  else if (k === "c") an.startCalibration(T.calibration_seconds);
+  else if (k === "g") mood.forceGlitch = true;
+  else if (k === "b") choreo.force();
+  else if (k === "w") ui.parallax = !ui.parallax;
+  else if (k === "0") mood.forced = null;
+  else if (k >= "1" && k <= "6") mood.forced = parseInt(k, 10) - 1;
+});
+// verberg het tandwiel na een tijdje stilstand
+let gearT; const showGear = () => { $("gear").style.opacity = 1; clearTimeout(gearT); gearT = setTimeout(() => { if ($("panel").style.display !== "block") $("gear").style.opacity = 0.15; }, 3000); };
+window.addEventListener("pointerdown", showGear); showGear();
+// in een omgeving zonder microfoon meteen het bestand voorstellen
+if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) || !window.isSecureContext) {
+  $("msg").textContent = "Microfoon is hier niet beschikbaar — kies een muziekbestand.";
+} else if (window.self !== window.top) {
+  $("btnMic").querySelector("small").textContent = "werkt niet in deze ingesloten weergave — gebruik je eigen adres";
+}
+</script>
+</body>
+</html>
